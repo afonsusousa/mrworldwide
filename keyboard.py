@@ -26,7 +26,7 @@ class DualInterfaceMonitor:
         except: return None, None
 
         for dev in devices:
-            page = dev.get('page', 0)
+            page = dev.get('usage_page', 0)
             
             if page == 0xFF60:
                 path_ping = dev['path']
@@ -35,7 +35,7 @@ class DualInterfaceMonitor:
 
         return path_ping, path_listen
 
-    def process_packet(self, data):
+    def process_packet(self, data, source=None):
 
         if not data or len(data) < 4: return None
 
@@ -81,7 +81,8 @@ class DualInterfaceMonitor:
                 if data_listen:
                     self.process_packet(data_listen, "LISTEN_INTERFACE")
 
-            except Exception:
+            except Exception as e:
+                print(f"Error in initial connection check: {e}")
                 pass
 
         if pong_seen and self.last_link_state == "UNKNOWN":
@@ -132,7 +133,8 @@ class DualInterfaceMonitor:
                 print(">> Dongle removed. Re-scanning...")
                 self.close_all()
                 self.last_link_state = "UNKNOWN"
-            except Exception:
+            except Exception as e:
+                print(f"Error in monitor loop: {e}")
                 pass
 
     def close_all(self):
