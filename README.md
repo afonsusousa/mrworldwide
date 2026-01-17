@@ -1,7 +1,7 @@
 # MrWorldwide Keyboard Monitor
 
 Got en-US Ajazz AK820 keyboard to use with a pt-PT laptop. 
-This is a small reverse engineer to switch between the layouts when the DONGLE signals Keyboard connection events. 
+This is a small reverse engineer to switch between the layouts when the *DONGLE* signals Keyboard connection events. 
 Use at your own risk.
 
 ## Message Structure
