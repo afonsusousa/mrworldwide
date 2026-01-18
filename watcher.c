@@ -1,28 +1,38 @@
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <signal.h>
 
 #ifdef _WIN32
 #include <windows.h>
 #include <Winuser.h>
-#include "hidapi.h"
+#define Sleep(x) Sleep(x)
 #else
 #include <unistd.h>
-#include <hidapi/hidapi.h>
+#include <libusb-1.0/libusb.h>
 #define Sleep(x) usleep((x)*1000)
 #endif
 
 #define VENDOR_ID  0x0C45
 #define PRODUCT_ID 0xFDFD
 
-#ifdef _WIN32
-#define PAGE_COMMAND 0xFF60
-#define PAGE_STATUS  0xFFFF
-#else
-#define PAGE_COMMAND 0xFF60
-#define PAGE_STATUS  0xFFFF
-#endif
+// based on sniffer and logs:
+// Interface 2: Status (EP 0x83 IN)
+// Interface 3: Command (EP 0x05 OUT, EP 0x85 IN)
+
+#define INTERFACE_STATUS 2
+#define INTERFACE_CMD    3
+
+#define EP_STATUS_IN 0x83
+#define EP_CMD_OUT   0x05
+#define EP_CMD_IN    0x85
+
+volatile sig_atomic_t stop_flag = 0;
+
+void handle_sigint(int sig) {
+    (void)sig;
+    stop_flag = 1;
+}
 
 typedef enum {
     STATE_UNKNOWN,
@@ -161,11 +171,10 @@ unsigned char CMD_PING[PACKET_SIZE] = {
 unsigned char CMD_RIPPLE[PACKET_SIZE] = {
     HID_REPORT_ID, LIGHT_HEADER_BYTE_1, LIGHT_HEADER_BYTE_2, LIGHT_HEADER_BYTE_3,
     RIPPLES, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00,
-    0x00, 0x01, 0x5, 0x4, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x5, 0x4, 0x00, 0x00, 0x00,
     CMD_MARKER_0_VAL, CMD_MARKER_1_VAL, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A
 };
-
 
 void set_layout(int layout_id) {
 #ifdef _WIN32
@@ -234,7 +243,7 @@ void set_direction(KeyboardLights *keyboard, uint8_t direction) {
     keyboard->direction = CLAMP(direction, MIN_DIRECTION, MAX_DIRECTION);
 }
 
-void keyboard_light_to_packet(KeyboardLights *k, Packet p) {
+void keyboard_light_to_packet(const KeyboardLights *k, Packet p) {
     memset(p, 0, PACKET_SIZE);
 
     p[0] = HID_REPORT_ID;
@@ -261,11 +270,21 @@ void keyboard_light_to_packet(KeyboardLights *k, Packet p) {
     p[PACKET_SIZE - 1] = checksum;
 }
 
-int process_packet(unsigned char *data, int len) {
+void print_packet(const int endpoint, const unsigned char *data, const int len) {
+    printf("Packet [EP 0x%02X] [%d]: ", endpoint, len);
+    for (int i = 0; i < len; i++) {
+        printf("%02X ", data[i]);
+    }
+    printf("\n");
+}
+
+int process_packet(const int endpoint, const unsigned char *data, const int len) {
     if (len < 4) return 0;
 
-    // STATUS
-    if (data[0] == 0x05 && data[1] == 0xA6) {
+    print_packet(endpoint, data, len);
+
+    // STATUS (from EP 0x83)
+    if (endpoint == EP_STATUS_IN && data[0] == 0x05 && data[1] == 0xA6) {
         int state_byte = data[3];
         if (state_byte == 0x01 && current_state != STATE_CONNECTED) {
             printf(">>> [EVENT] KEYBOARD CONNECTED (Link Up)\n");
@@ -281,65 +300,112 @@ int process_packet(unsigned char *data, int len) {
         return 0;
     }
 
-    // PONG
-    if (data[0] == 0x20 && data[1] == 0x01) {
+    // PONG (from EP 0x85)
+    if (endpoint == EP_CMD_IN && data[0] == 0x20 && data[1] == 0x01) {
         return 1;
     }
 
     return 0;
 }
 
-int find_interfaces(char **path_cmd, char **path_stat) {
-    struct hid_device_info *devs, *cur_dev;
+// Libusb helper functions
+libusb_device_handle *open_device() {
+    libusb_device **devs;
+    libusb_device_handle *handle = nullptr;
+    ssize_t cnt = libusb_get_device_list(nullptr, &devs);
+    int r;
 
-    devs = hid_enumerate(VENDOR_ID, PRODUCT_ID);
-    cur_dev = devs;
+    if (cnt < 0)
+        return nullptr;
 
-    int found_cmd = 0;
-    int found_stat = 0;
-
-    while (cur_dev) {
-        if (cur_dev->usage_page == PAGE_COMMAND) {
-            if (*path_cmd) free(*path_cmd);
-            *path_cmd = strdup(cur_dev->path);
-            found_cmd = 1;
+    for (ssize_t i = 0; i < cnt; i++) {
+        struct libusb_device_descriptor desc;
+        r = libusb_get_device_descriptor(devs[i], &desc);
+        if (r < 0) continue;
+        if (desc.idVendor == VENDOR_ID && desc.idProduct == PRODUCT_ID) {
+            r = libusb_open(devs[i], &handle);
+            if (r < 0) {
+                fprintf(stderr, "Maybe check permissions\n");
+                handle = nullptr;
+            } else {
+                break; // Found
+            }
         }
-        else if (cur_dev->usage_page == PAGE_STATUS) {
-            if (*path_stat) free(*path_stat);
-            *path_stat = strdup(cur_dev->path);
-            found_stat = 1;
-        }
-        cur_dev = cur_dev->next;
     }
 
-    hid_free_enumeration(devs);
-    return (found_cmd && found_stat);
+    libusb_free_device_list(devs, 1);
+
+    if (!handle) return nullptr;
+
+    for (int i = 0; i < 2; i++) {
+        int interfaces[] = {INTERFACE_STATUS, INTERFACE_CMD};
+        int iface = interfaces[i];
+        if (libusb_kernel_driver_active(handle, iface) == 1) {
+            r = libusb_detach_kernel_driver(handle, iface);
+            if (r < 0) fprintf(stderr, "Failed to detach kernel driver Iface %d: %s\n", iface, libusb_error_name(r));
+        }
+        r = libusb_claim_interface(handle, iface);
+        if (r < 0) {
+            fprintf(stderr, "libusb_claim_interface Iface %d error: %s\n", iface, libusb_error_name(r));
+        }
+    }
+    return handle;
 }
 
-void check_initial_connection(hid_device *dev_cmd, hid_device *dev_stat) {
-    printf(">> Checking initial connection state...\n");
+void close_device(libusb_device_handle *handle) {
+    if (handle) {
+        libusb_release_interface(handle, INTERFACE_STATUS);
+        libusb_release_interface(handle, INTERFACE_CMD);
+        libusb_close(handle);
+    }
+}
+
+int send_packet(libusb_device_handle *handle, unsigned char *data, int len) {
+    int transferred;
+    // Skip first byte if 0x00
+    if (len > 0 && data[0] == 0x00) {
+        data++;
+        len--;
+    }
+    int r = libusb_interrupt_transfer(handle, EP_CMD_OUT, data, len, &transferred, 100);
+    if (r < 0) {
+        fprintf(stderr, "Write error to EP 0x%02X: %s\n", EP_CMD_OUT, libusb_error_name(r));
+        return -1;
+    }
+    return transferred;
+}
+
+int read_packet(libusb_device_handle *handle, int endpoint, unsigned char *data, int len, int timeout) {
+    int transferred;
+    int r = libusb_interrupt_transfer(handle, endpoint, data, len, &transferred, timeout);
+    if (r == 0)
+        return transferred;
+    if (r == LIBUSB_ERROR_TIMEOUT)
+        return 0;
+    return -1;
+}
+
+void check_initial_connection(libusb_device_handle *handle) {
+    printf(">> Checking initial connection...\n");
     unsigned char buf[64];
 
-    hid_write(dev_cmd, CMD_RIPPLE, sizeof(CMD_RIPPLE));
+    send_packet(handle, CMD_RIPPLE, sizeof(CMD_RIPPLE));
     Sleep(50);
 
     int pong_seen = 0;
 
     for (int i = 0; i < 10; i++) {
-        hid_write(dev_cmd, CMD_PING, sizeof(CMD_PING));
-
-        int res_cmd = hid_read_timeout(dev_cmd, buf, 64, 100);
-        if (res_cmd > 0) {
-            if (process_packet(buf, res_cmd)) {
-                printf("  [PONG] on attempt #%d\n", i+3);
+        send_packet(handle, CMD_PING, sizeof(CMD_PING));
+        int res = read_packet(handle, EP_CMD_IN, buf, 32, 100);
+        if (res > 0) {
+            if (process_packet(EP_CMD_IN, buf, res)) {
+                printf("[PONG] on attempt #%d\n", i+3);
                 pong_seen = 1;
                 break;
             }
         }
-
-        int res_stat = hid_read_timeout(dev_stat, buf, 64, 50);
-        if (res_stat > 0) {
-            process_packet(buf, res_stat);
+        while (read_packet(handle, EP_STATUS_IN, buf, 64, 10) > 0) {
+            //flush pending packets;
         }
     }
 
@@ -358,57 +424,49 @@ int main(int argc, char* argv[]) {
     (void) argc;
     (void) argv;
 
-    printf("Starting for VID=%04X PID=%04X...\n", VENDOR_ID, PRODUCT_ID);
+    signal(SIGINT, handle_sigint);
 
-    if (hid_init()) return -1;
+    printf("Starting for VID=%04X PID=%04X (libusb)...\n", VENDOR_ID, PRODUCT_ID);
 
-    hid_device *dev_cmd = NULL;
-    hid_device *dev_stat = NULL;
-    char *path_cmd = NULL;
-    char *path_stat = NULL;
+    if (libusb_init(nullptr) < 0) return -1;
 
+    libusb_device_handle *handle = nullptr;
     unsigned char buf[64];
 
-    while (1) {
-        if (!dev_cmd || !dev_stat) {
-            if (find_interfaces(&path_cmd, &path_stat)) {
-
-                dev_cmd = hid_open_path(path_cmd);
-                dev_stat = hid_open_path(path_stat);
-
-                if (dev_cmd && dev_stat) {
-                    printf(">> Interfaces Opened\n");
-                    check_initial_connection(dev_cmd, dev_stat);
-                    printf(">> Listening for events\n");
-                } else {
-                    printf(">> Error opening paths\n");
-                    if (dev_cmd) { hid_close(dev_cmd); dev_cmd = NULL; }
-                    if (dev_stat) { hid_close(dev_stat); dev_stat = NULL; }
-                }
+    while (!stop_flag) {
+        if (!handle) {
+            handle = open_device();
+            if (handle) {
+                printf(">> Device Opened\n");
+                check_initial_connection(handle);
+                printf(">> Listening for events\n");
             } else {
                 printf("Waiting for dongle...\n");
-            }
-
-            if (!dev_cmd || !dev_stat) {
                 Sleep(2000);
                 continue;
             }
         }
 
-        int res = hid_read_timeout(dev_stat, buf, 64, 1000);
-
+        int res = read_packet(handle, EP_STATUS_IN, buf, 64, 100);
         if (res > 0) {
-            process_packet(buf, res);
-        } else if (res == -1) {
-            printf(">> Device removed\n");
-            hid_close(dev_cmd);
-            hid_close(dev_stat);
-            dev_cmd = NULL;
-            dev_stat = NULL;
+            process_packet(EP_STATUS_IN, buf, res);
+        } else if (res < 0 && res != LIBUSB_ERROR_TIMEOUT) {
+            printf(">> Device removed or error (EP 0x%02X)\n", EP_STATUS_IN);
+            close_device(handle);
+            handle = nullptr;
             current_state = STATE_UNKNOWN;
+            continue;
         }
-        hid_read_timeout(dev_cmd, buf, 64, 1);
+
+        // Poll Command Endpoint (32 bytes)
+        res = read_packet(handle, EP_CMD_IN, buf, 32, 10);
+        if (res > 0) {
+            process_packet(EP_CMD_IN, buf, res);
+        }
     }
-    hid_exit();
+
+    if (handle) close_device(handle);
+    libusb_exit(nullptr);
+    printf("\nExiting cleanly.\n");
     return 0;
 }

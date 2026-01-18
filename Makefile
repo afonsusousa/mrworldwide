@@ -11,11 +11,11 @@ ifeq ($(OS),Windows_NT)
 	TARGET_BIN = $(TARGET).exe
 	POST_BUILD = cp windows/hidapi/hidapi.dll . 2>/dev/null || copy windows\hidapi\hidapi.dll . 2>/dev/null || true
 else
-	# Linux
+	# Linux Configuration
 	UNAME_S := $(shell uname -s)
 	ifeq ($(UNAME_S),Linux)
-		CFLAGS += $(shell pkg-config --cflags hidapi-hidraw)
-		LIBS = $(shell pkg-config --libs hidapi-hidraw)
+		CFLAGS += $(shell pkg-config --cflags libusb-1.0)
+		LIBS = $(shell pkg-config --libs libusb-1.0)
 		TARGET_BIN = $(TARGET)
 		POST_BUILD = @echo "Build complete."
 	endif
@@ -29,5 +29,3 @@ $(TARGET_BIN): $(SRCS)
 
 clean:
 	rm -f $(TARGET) $(TARGET).exe
-
-re: clean all
