@@ -2,15 +2,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+#ifdef _WIN32
 #include <windows.h>
 #include <Winuser.h>
 #include "hidapi.h"
+#else
+#include <unistd.h>
+#include <hidapi/hidapi.h>
+#define Sleep(x) usleep((x)*1000)
+#endif
 
 #define VENDOR_ID  0x0C45
 #define PRODUCT_ID 0xFDFD
 
+#ifdef _WIN32
 #define PAGE_COMMAND 0xFF60
 #define PAGE_STATUS  0xFFFF
+#else
+#define PAGE_COMMAND 0xFF60
+#define PAGE_STATUS  0xFFFF
+#endif
 
 typedef enum {
     STATE_UNKNOWN,
@@ -139,6 +151,7 @@ unsigned char CMD_RIPPLE[PACKET_SIZE] = {
 };
 
 void set_layout(int layout_id) {
+#ifdef _WIN32
     HWND hwnd = GetForegroundWindow();
     if (!hwnd) return;
 
@@ -149,6 +162,10 @@ void set_layout(int layout_id) {
 
     if (new_hkl)
         PostMessage(hwnd, WM_INPUTLANGCHANGEREQUEST, 0, (LPARAM)new_hkl);
+#else
+    (void) layout_id;
+    // Linux implementation to be added later
+#endif
 }
 
 int process_packet(unsigned char *data, int len) {
@@ -210,7 +227,7 @@ void check_initial_connection(hid_device *dev_cmd, hid_device *dev_stat) {
     printf(">> Checking initial connection state...\n");
     unsigned char buf[64];
 
-    hid_write(dev_cmd, CMD_INIT, sizeof(CMD_INIT));
+    hid_write(dev_cmd, CMD_RIPPLE, sizeof(CMD_INIT));
     Sleep(50);
 
     int pong_seen = 0;
@@ -245,6 +262,9 @@ void check_initial_connection(hid_device *dev_cmd, hid_device *dev_stat) {
 }
 
 int main(int argc, char* argv[]) {
+    (void) argc;
+    (void) argv;
+
     printf("Starting for VID=%04X PID=%04X...\n", VENDOR_ID, PRODUCT_ID);
 
     if (hid_init()) return -1;
