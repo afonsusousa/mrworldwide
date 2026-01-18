@@ -30,28 +30,42 @@ typedef enum {
     STATE_DISCONNECTED
 } LinkState;
 
+typedef enum {
+    STATIC = 0x1,
+    SINGLE_ON = 0x2,
+    SINGLE_OFF = 0x3,
+    GLITTERING = 0x4,
+    FALLING = 0x5,
+    COLOURFUL = 0x6,
+    BREATH = 0x7,
+    SPECTRUM = 0x8,
+    OUTWARD = 0x9,
+    SCROLLING = 0xA,
+    ROLLING = 0xB,
+    ROTATING = 0xC,
+    EXPLODE = 0xD,
+    LAUNCH = 0xE,
+    RIPPLES = 0xF,
+    FLOWING = 0x10,
+    PULSATING = 0x11,
+    TILT = 0x12,
+    SHUTTLE = 0x13,
+    LED_OFF = 0x0
+} LightEffectType;
+
 LinkState current_state = STATE_UNKNOWN;
 
-#define STATIC 0x1
-#define SINGLE_ON 0x2
-#define SINGLE_OFF 0x3
-#define GLITTERING 0x4
-#define FALLING 0x5
-#define COLOURFUL 0x6
-#define BREATH 0x7
-#define SPECTRUM 0x8
-#define OUTWARD 0x9
-#define SCROLLING 0xA
-#define ROLLING 0xB
-#define ROTATING 0xC
-#define EXPLODE 0xD
-#define LAUNCH 0xE
-#define RIPPLES 0xF
-#define FLOWING 0x10
-#define PULSATING 0x11
-#define TILT 0x12
-#define SHUTTLE 0x13
-#define LED_OFF 0x0
+typedef struct S_Keyboard {
+    LightEffectType effect;
+    uint8_t red;
+    uint8_t green;
+    uint8_t blue;
+    uint8_t colorful;
+    uint8_t brightness;
+    uint8_t speed;
+    uint8_t direction;
+    uint32_t available;
+} KeyboardLights;
 
 #define HEADER_1 0
 #define HEADER_2 1
@@ -130,6 +144,8 @@ LinkState current_state = STATE_UNKNOWN;
 #define CMD_MARKER_0_VAL 0xAA
 #define CMD_MARKER_1_VAL 0x55
 
+typedef uint8_t Packet[PACKET_SIZE];
+
 unsigned char CMD_INIT[PACKET_SIZE] = {
     HID_REPORT_ID, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -150,6 +166,7 @@ unsigned char CMD_RIPPLE[PACKET_SIZE] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A
 };
 
+
 void set_layout(int layout_id) {
 #ifdef _WIN32
     HWND hwnd = GetForegroundWindow();
@@ -166,6 +183,82 @@ void set_layout(int layout_id) {
     (void) layout_id;
     // Linux implementation to be added later
 #endif
+}
+
+void set_effect(KeyboardLights *keyboard, LightEffectType effect) {
+    keyboard->effect = effect;
+    switch (effect) {
+        case STATIC: keyboard->available = STATIC_AVAILABLE; break;
+        case SINGLE_ON: keyboard->available = SINGLE_ON_AVAILABLE; break;
+        case SINGLE_OFF: keyboard->available = SINGLE_OFF_AVAILABLE; break;
+        case GLITTERING: keyboard->available = GLITTERING_AVAILABLE; break;
+        case FALLING: keyboard->available = FALLING_AVAILABLE; break;
+        case COLOURFUL: keyboard->available = COLOURFUL_AVAILABLE; break;
+        case BREATH: keyboard->available = BREATH_AVAILABLE; break;
+        case SPECTRUM: keyboard->available = SPECTRUM_AVAILABLE; break;
+        case OUTWARD: keyboard->available = OUTWARD_AVAILABLE; break;
+        case SCROLLING: keyboard->available = SCROLLING_AVAILABLE; break;
+        case ROLLING: keyboard->available = ROLLING_AVAILABLE; break;
+        case ROTATING: keyboard->available = ROTATING_AVAILABLE; break;
+        case EXPLODE: keyboard->available = EXPLODE_AVAILABLE; break;
+        case LAUNCH: keyboard->available = LAUNCH_AVAILABLE; break;
+        case RIPPLES: keyboard->available = RIPPLES_AVAILABLE; break;
+        case FLOWING: keyboard->available = FLOWING_AVAILABLE; break;
+        case PULSATING: keyboard->available = PULSATING_AVAILABLE; break;
+        case TILT: keyboard->available = TILT_AVAILABLE; break;
+        case SHUTTLE: keyboard->available = SHUTTLE_AVAILABLE; break;
+        case LED_OFF: keyboard->available = LED_OFF_AVAILABLE; break;
+        default: keyboard->available = 0; break;
+    }
+}
+
+void set_rgb(KeyboardLights *keyboard, uint8_t red, uint8_t green, uint8_t blue) {
+    keyboard->red = CLAMP(red, MIN_RGB, MAX_RGB);
+    keyboard->green = CLAMP(green, MIN_RGB, MAX_RGB);
+    keyboard->blue = CLAMP(blue, MIN_RGB, MAX_RGB);
+}
+
+void set_colorful(KeyboardLights *keyboard, uint8_t colorful) {
+    keyboard->colorful = CLAMP(colorful, MIN_COLORFUL, MAX_COLORFUL);
+}
+
+void set_brightness(KeyboardLights *keyboard, uint8_t brightness) {
+    keyboard->brightness = CLAMP(brightness, MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+}
+
+void set_speed(KeyboardLights *keyboard, uint8_t speed) {
+    keyboard->speed = CLAMP(speed, MIN_SPEED, MAX_SPEED);
+}
+
+void set_direction(KeyboardLights *keyboard, uint8_t direction) {
+    keyboard->direction = CLAMP(direction, MIN_DIRECTION, MAX_DIRECTION);
+}
+
+void keyboard_light_to_packet(KeyboardLights *k, Packet p) {
+    memset(p, 0, PACKET_SIZE);
+
+    p[0] = HID_REPORT_ID;
+    p[1 + HEADER_1] = LIGHT_HEADER_BYTE_1;
+    p[1 + HEADER_2] = LIGHT_HEADER_BYTE_2;
+    p[1 + HEADER_3] = LIGHT_HEADER_BYTE_3;
+
+    p[1 + STYLE] = k->effect;
+    p[1 + RED] = (k->available & FLAG_RED) ? k->red : DEFAULT_RED;
+    p[1 + GREEN] = (k->available & FLAG_GREEN) ? k->green : DEFAULT_GREEN;
+    p[1 + BLUE] = (k->available & FLAG_BLUE) ? k->blue : DEFAULT_BLUE;
+    p[1 + COLORFUL] = (k->available & FLAG_COLORFUL) ? k->colorful : DEFAULT_COLORFUL;
+    p[1 + BRIGHTNESS] = (k->available & FLAG_BRIGHTNESS) ? k->brightness : DEFAULT_BRIGHTNESS;
+    p[1 + SPEED] = (k->available & FLAG_SPEED) ? k->speed : DEFAULT_SPEED;
+    p[1 + DIRECTION] = (k->available & FLAG_DIRECTION) ? k->direction : DEFAULT_DIRECTION;
+
+    p[1 + MARKER_0] = CMD_MARKER_0_VAL;
+    p[1 + MARKER_1] = CMD_MARKER_1_VAL;
+
+    uint8_t checksum = 0;
+    for (int i = 1; i < PACKET_SIZE - 1; i++) {
+        checksum ^= p[i];
+    }
+    p[PACKET_SIZE - 1] = checksum;
 }
 
 int process_packet(unsigned char *data, int len) {
@@ -227,7 +320,7 @@ void check_initial_connection(hid_device *dev_cmd, hid_device *dev_stat) {
     printf(">> Checking initial connection state...\n");
     unsigned char buf[64];
 
-    hid_write(dev_cmd, CMD_RIPPLE, sizeof(CMD_INIT));
+    hid_write(dev_cmd, CMD_RIPPLE, sizeof(CMD_RIPPLE));
     Sleep(50);
 
     int pong_seen = 0;
