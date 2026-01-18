@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <signal.h>
@@ -13,19 +14,17 @@
 #define Sleep(x) usleep((x)*1000)
 #endif
 
-#define VENDOR_ID  0x0C45
-#define PRODUCT_ID 0xFDFD
+typedef enum {
+    USB_VENDOR_ID = 0x0C45,
+    USB_PRODUCT_ID = 0xFDFD,
 
-// based on sniffer and logs:
-// Interface 2: Status (EP 0x83 IN)
-// Interface 3: Command (EP 0x05 OUT, EP 0x85 IN)
+    INTERFACE_STATUS = 2,
+    INTERFACE_CMD = 3,
 
-#define INTERFACE_STATUS 2
-#define INTERFACE_CMD    3
-
-#define EP_STATUS_IN 0x83
-#define EP_CMD_OUT   0x05
-#define EP_CMD_IN    0x85
+    EP_STATUS_IN = 0x83,
+    EP_CMD_OUT = 0x05,
+    EP_CMD_IN = 0x85
+} UsbConfig;
 
 volatile sig_atomic_t stop_flag = 0;
 
@@ -65,6 +64,95 @@ typedef enum {
 
 LinkState current_state = STATE_UNKNOWN;
 
+typedef enum {
+    IDX_HEADER_1 = 0,
+    IDX_HEADER_2 = 1,
+    IDX_HEADER_3 = 2,
+    IDX_STYLE = 3,
+    IDX_RED = 4,
+    IDX_GREEN = 5,
+    IDX_BLUE = 6,
+    IDX_COLORFUL = 11,
+    IDX_BRIGHTNESS = 12,
+    IDX_SPEED = 13,
+    IDX_DIRECTION = 14,
+    IDX_MARKER_0 = 17,
+    IDX_MARKER_1 = 18,
+    IDX_XOR_CHECKSUM = 31
+} PacketIndex;
+
+typedef enum {
+    FLAG_RED = (1 << IDX_RED),
+    FLAG_GREEN = (1 << IDX_GREEN),
+    FLAG_BLUE = (1 << IDX_BLUE),
+    FLAG_COLORFUL = (1 << IDX_COLORFUL),
+    FLAG_BRIGHTNESS = (1 << IDX_BRIGHTNESS),
+    FLAG_SPEED = (1 << IDX_SPEED),
+    FLAG_DIRECTION = (1 << IDX_DIRECTION)
+} PacketFlag;
+
+typedef enum {
+    DEFAULT_RED = 0xFF,
+    DEFAULT_GREEN = 0xFF,
+    DEFAULT_BLUE = 0xFF,
+    DEFAULT_COLORFUL = 0x01,
+    DEFAULT_BRIGHTNESS = 0x05,
+    DEFAULT_SPEED = 0x03,
+    DEFAULT_DIRECTION = 0x00
+} PacketDefault;
+
+typedef enum {
+    MIN_RGB = 0x00,
+    MAX_RGB = 0xFF,
+
+    MIN_COLORFUL = 0x00,
+    MAX_COLORFUL = 0x01,
+
+    MIN_BRIGHTNESS = 0x01,
+    MAX_BRIGHTNESS = 0x05,
+
+    MIN_SPEED = 0x01,
+    MAX_SPEED = 0x05,
+
+    MIN_DIRECTION = 0x00,
+    MAX_DIRECTION = 0x03
+} PacketRange;
+
+typedef enum {
+    STATIC_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS),
+    SINGLE_ON_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    SINGLE_OFF_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    GLITTERING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    FALLING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    COLOURFUL_AVAILABLE = (FLAG_BRIGHTNESS | FLAG_SPEED),
+    BREATH_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    SPECTRUM_AVAILABLE = (FLAG_BRIGHTNESS | FLAG_SPEED),
+    OUTWARD_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    SCROLLING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION),
+    ROLLING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION),
+    ROTATING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION),
+    EXPLODE_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    LAUNCH_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    RIPPLES_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    FLOWING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION),
+    PULSATING_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    TILT_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION),
+    SHUTTLE_AVAILABLE = (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED),
+    LED_OFF_AVAILABLE = 0
+} EffectAvailableFlags;
+
+typedef enum {
+    PACKET_SIZE = 33,
+    HID_REPORT_ID = 0x00,
+    LIGHT_HEADER_BYTE_1 = 0x05,
+    LIGHT_HEADER_BYTE_2 = 0x10,
+    LIGHT_HEADER_BYTE_3 = 0x00,
+    CMD_MARKER_0_VAL = 0xAA,
+    CMD_MARKER_1_VAL = 0x55
+} PacketConstants;
+
+#define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
+
 typedef struct S_Keyboard {
     LightEffectType effect;
     uint8_t red;
@@ -76,83 +164,6 @@ typedef struct S_Keyboard {
     uint8_t direction;
     uint32_t available;
 } KeyboardLights;
-
-#define HEADER_1 0
-#define HEADER_2 1
-#define HEADER_3 2
-#define STYLE 3
-#define RED 4
-#define GREEN 5
-#define BLUE 6
-#define COLORFUL 11
-#define BRIGHTNESS 12
-#define SPEED 13
-#define DIRECTION 14
-#define MARKER_0 17
-#define MARKER_1 18
-#define XOR_CHECKSUM 31
-
-#define FLAG_RED (1 << RED)
-#define FLAG_GREEN (1 << GREEN)
-#define FLAG_BLUE (1 << BLUE)
-#define FLAG_COLORFUL (1 << COLORFUL)
-#define FLAG_BRIGHTNESS (1 << BRIGHTNESS)
-#define FLAG_SPEED (1 << SPEED)
-#define FLAG_DIRECTION (1 << DIRECTION)
-
-#define DEFAULT_RED 0xFF
-#define DEFAULT_GREEN 0xFF
-#define DEFAULT_BLUE 0xFF
-#define DEFAULT_COLORFUL 0x01
-#define DEFAULT_BRIGHTNESS 0x05
-#define DEFAULT_SPEED 0x03
-#define DEFAULT_DIRECTION 0x00
-
-#define MIN_RGB 0x00
-#define MAX_RGB 0xFF
-
-#define MIN_COLORFUL 0x00
-#define MAX_COLORFUL 0x01
-
-#define MIN_BRIGHTNESS 0x01
-#define MAX_BRIGHTNESS 0x05
-
-#define MIN_SPEED 0x01
-#define MAX_SPEED 0x05
-
-#define MIN_DIRECTION 0x00
-#define MAX_DIRECTION 0x03
-
-#define STATIC_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS)
-#define SINGLE_ON_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define SINGLE_OFF_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define GLITTERING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define FALLING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define COLOURFUL_AVAILABLE  (FLAG_BRIGHTNESS | FLAG_SPEED)
-#define BREATH_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define SPECTRUM_AVAILABLE (FLAG_BRIGHTNESS | FLAG_SPEED)
-#define OUTWARD_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define SCROLLING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION)
-#define ROLLING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION)
-#define ROTATING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION)
-#define EXPLODE_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define LAUNCH_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define RIPPLES_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define FLOWING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION)
-#define PULSATING_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define TILT_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED | FLAG_DIRECTION)
-#define SHUTTLE_AVAILABLE (FLAG_RED | FLAG_GREEN | FLAG_BLUE | FLAG_COLORFUL | FLAG_BRIGHTNESS | FLAG_SPEED)
-#define LED_OFF_AVAILABLE (0)
-
-#define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
-
-#define PACKET_SIZE 33
-#define HID_REPORT_ID 0x00
-#define LIGHT_HEADER_BYTE_1 0x05
-#define LIGHT_HEADER_BYTE_2 0x10
-#define LIGHT_HEADER_BYTE_3 0x00
-#define CMD_MARKER_0_VAL 0xAA
-#define CMD_MARKER_1_VAL 0x55
 
 typedef uint8_t Packet[PACKET_SIZE];
 
@@ -171,7 +182,7 @@ unsigned char CMD_PING[PACKET_SIZE] = {
 unsigned char CMD_RIPPLE[PACKET_SIZE] = {
     HID_REPORT_ID, LIGHT_HEADER_BYTE_1, LIGHT_HEADER_BYTE_2, LIGHT_HEADER_BYTE_3,
     RIPPLES, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x5, 0x4, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x5, 0x4, 0x00, 0x00, 0x00,
     CMD_MARKER_0_VAL, CMD_MARKER_1_VAL, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2A
 };
@@ -243,25 +254,25 @@ void set_direction(KeyboardLights *keyboard, uint8_t direction) {
     keyboard->direction = CLAMP(direction, MIN_DIRECTION, MAX_DIRECTION);
 }
 
-void keyboard_light_to_packet(const KeyboardLights *k, Packet p) {
+void keyboard_light_to_packet(KeyboardLights *k, Packet p) {
     memset(p, 0, PACKET_SIZE);
 
     p[0] = HID_REPORT_ID;
-    p[1 + HEADER_1] = LIGHT_HEADER_BYTE_1;
-    p[1 + HEADER_2] = LIGHT_HEADER_BYTE_2;
-    p[1 + HEADER_3] = LIGHT_HEADER_BYTE_3;
+    p[1 + IDX_HEADER_1] = LIGHT_HEADER_BYTE_1;
+    p[1 + IDX_HEADER_2] = LIGHT_HEADER_BYTE_2;
+    p[1 + IDX_HEADER_3] = LIGHT_HEADER_BYTE_3;
 
-    p[1 + STYLE] = k->effect;
-    p[1 + RED] = (k->available & FLAG_RED) ? k->red : DEFAULT_RED;
-    p[1 + GREEN] = (k->available & FLAG_GREEN) ? k->green : DEFAULT_GREEN;
-    p[1 + BLUE] = (k->available & FLAG_BLUE) ? k->blue : DEFAULT_BLUE;
-    p[1 + COLORFUL] = (k->available & FLAG_COLORFUL) ? k->colorful : DEFAULT_COLORFUL;
-    p[1 + BRIGHTNESS] = (k->available & FLAG_BRIGHTNESS) ? k->brightness : DEFAULT_BRIGHTNESS;
-    p[1 + SPEED] = (k->available & FLAG_SPEED) ? k->speed : DEFAULT_SPEED;
-    p[1 + DIRECTION] = (k->available & FLAG_DIRECTION) ? k->direction : DEFAULT_DIRECTION;
+    p[1 + IDX_STYLE] = k->effect;
+    p[1 + IDX_RED] = (k->available & FLAG_RED) ? k->red : DEFAULT_RED;
+    p[1 + IDX_GREEN] = (k->available & FLAG_GREEN) ? k->green : DEFAULT_GREEN;
+    p[1 + IDX_BLUE] = (k->available & FLAG_BLUE) ? k->blue : DEFAULT_BLUE;
+    p[1 + IDX_COLORFUL] = (k->available & FLAG_COLORFUL) ? k->colorful : DEFAULT_COLORFUL;
+    p[1 + IDX_BRIGHTNESS] = (k->available & FLAG_BRIGHTNESS) ? k->brightness : DEFAULT_BRIGHTNESS;
+    p[1 + IDX_SPEED] = (k->available & FLAG_SPEED) ? k->speed : DEFAULT_SPEED;
+    p[1 + IDX_DIRECTION] = (k->available & FLAG_DIRECTION) ? k->direction : DEFAULT_DIRECTION;
 
-    p[1 + MARKER_0] = CMD_MARKER_0_VAL;
-    p[1 + MARKER_1] = CMD_MARKER_1_VAL;
+    p[1 + IDX_MARKER_0] = CMD_MARKER_0_VAL;
+    p[1 + IDX_MARKER_1] = CMD_MARKER_1_VAL;
 
     uint8_t checksum = 0;
     for (int i = 1; i < PACKET_SIZE - 1; i++) {
@@ -270,7 +281,7 @@ void keyboard_light_to_packet(const KeyboardLights *k, Packet p) {
     p[PACKET_SIZE - 1] = checksum;
 }
 
-void print_packet(const int endpoint, const unsigned char *data, const int len) {
+void print_packet(int endpoint, unsigned char *data, int len) {
     printf("Packet [EP 0x%02X] [%d]: ", endpoint, len);
     for (int i = 0; i < len; i++) {
         printf("%02X ", data[i]);
@@ -278,7 +289,7 @@ void print_packet(const int endpoint, const unsigned char *data, const int len) 
     printf("\n");
 }
 
-int process_packet(const int endpoint, const unsigned char *data, const int len) {
+int process_packet(int endpoint, unsigned char *data, int len) {
     if (len < 4) return 0;
 
     print_packet(endpoint, data, len);
@@ -322,7 +333,8 @@ libusb_device_handle *open_device() {
         struct libusb_device_descriptor desc;
         r = libusb_get_device_descriptor(devs[i], &desc);
         if (r < 0) continue;
-        if (desc.idVendor == VENDOR_ID && desc.idProduct == PRODUCT_ID) {
+
+        if (desc.idVendor == USB_VENDOR_ID && desc.idProduct == USB_PRODUCT_ID) {
             r = libusb_open(devs[i], &handle);
             if (r < 0) {
                 fprintf(stderr, "Maybe check permissions\n");
@@ -367,6 +379,7 @@ int send_packet(libusb_device_handle *handle, unsigned char *data, int len) {
         data++;
         len--;
     }
+
     int r = libusb_interrupt_transfer(handle, EP_CMD_OUT, data, len, &transferred, 100);
     if (r < 0) {
         fprintf(stderr, "Write error to EP 0x%02X: %s\n", EP_CMD_OUT, libusb_error_name(r));
@@ -389,7 +402,14 @@ void check_initial_connection(libusb_device_handle *handle) {
     printf(">> Checking initial connection...\n");
     unsigned char buf[64];
 
-    send_packet(handle, CMD_RIPPLE, sizeof(CMD_RIPPLE));
+    KeyboardLights k;
+    set_layout(0x0816);
+    set_effect(&k, COLOURFUL);
+    set_rgb(&k, 0xFF, 0xFF, 0xFF);
+    set_brightness(&k, 0x05);
+    set_speed(&k, 0x03);
+    keyboard_light_to_packet(&k, buf);
+    send_packet(handle, buf, PACKET_SIZE);
     Sleep(50);
 
     int pong_seen = 0;
@@ -426,7 +446,7 @@ int main(int argc, char* argv[]) {
 
     signal(SIGINT, handle_sigint);
 
-    printf("Starting for VID=%04X PID=%04X (libusb)...\n", VENDOR_ID, PRODUCT_ID);
+    printf("Starting for VID=%04X PID=%04X (libusb)...\n", USB_VENDOR_ID, USB_PRODUCT_ID);
 
     if (libusb_init(nullptr) < 0) return -1;
 
